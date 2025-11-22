@@ -1388,85 +1388,18 @@ async def chat(
         )
         logger.info(f"Chat desbloqueado por {interaction.user}")
 
-class AnuncioModal(discord.ui.Modal, title="Criar Anúncio"):
-    """Modal para criar anúncios com suporte a quebras de linha"""
-    
-    titulo = discord.ui.TextInput(
-        label="Título (opcional)",
-        placeholder="Digite o título do anúncio",
-        required=False,
-        max_length=256
-    )
-    
-    mensagem = discord.ui.TextInput(
-        label="Mensagem (opcional)",
-        placeholder="Digite a mensagem com quebras de linha (use Enter)",
-        required=False,
-        max_length=4000,
-        style=discord.TextStyle.long
-    )
-    
-    cor = discord.ui.TextInput(
-        label="Cor do Embed (opcional)",
-        placeholder="Nome (blue, red, green) ou HEX (#FF5733)",
-        required=False,
-        max_length=20
-    )
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        self.submitted_data = {
-            "titulo": self.titulo.value.strip() if self.titulo.value else None,
-            "mensagem": self.mensagem.value.strip() if self.mensagem.value else None,
-            "cor": self.cor.value.strip() if self.cor.value else None
-        }
-        await interaction.response.defer(ephemeral=True)
-
-class AnexosView(discord.ui.View):
-    """View com botões para anexos e continuação"""
-    
-    def __init__(self, interaction: discord.Interaction):
-        super().__init__(timeout=600)
-        self.interaction_user = interaction.user
-        self.anexos = []
-        self.interaction = interaction
-        self.arquivo_adicionado = False
-    
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.interaction_user.id:
-            await interaction.response.send_message(
-                "❌ Você não pode usar este botão!",
-                ephemeral=True
-            )
-            return False
-        return True
-    
-    @discord.ui.button(label="📎 Enviar Foto/Vídeo/GIF", style=discord.ButtonStyle.blurple)
-    async def adicionar_anexo(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Instrui o usuário a enviar arquivo como mensagem"""
-        await interaction.response.send_message(
-            "📤 **Como adicionar anexos:**\n\n"
-            "1️⃣ Envie uma mensagem **normal** neste canal com a imagem/vídeo/gif\n"
-            "2️⃣ Clique no botão ✅ **Continuar** após enviar\n\n"
-            "⚠️ Você tem **até 10 anexos** (fotos/vídeos/gifs)",
-            ephemeral=True
-        )
-        self.arquivo_adicionado = True
-    
-    @discord.ui.button(label="✅ Continuar", style=discord.ButtonStyle.green)
-    async def continuar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        self.stop()
-    
-    @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.red)
-    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        self.cancelado = True
-        self.stop()
-
-@bot.tree.command(name="anunciar", description="[ADMIN] Envia um anúncio com modal e anexos")
+@bot.tree.command(name="anunciar", description="[ADMIN] Envia um anúncio com anexos")
 @app_commands.guild_only()
-async def anunciar(interaction: discord.Interaction):
-    """Comando para anúncios com modal e anexos"""
+@app_commands.describe(
+    mensagem="Mensagem do anúncio (use quebras de linha)",
+    canal="Canal onde enviar (opcional - usa canal atual se não especificado)"
+)
+async def anunciar(
+    interaction: discord.Interaction,
+    mensagem: str,
+    canal: Optional[discord.TextChannel] = None
+):
+    """Comando simples para anúncios"""
     
     if not is_admin_or_moderator(interaction):
         await interaction.response.send_message(
@@ -1476,312 +1409,115 @@ async def anunciar(interaction: discord.Interaction):
         return
     
     try:
-        # Abre o modal
-        modal = AnuncioModal()
-        await interaction.response.send_modal(modal)
+        await interaction.response.defer(ephemeral=True)
         
-        # Aguarda submit do modal
-        await asyncio.wait_for(
-            asyncio.create_task(_wait_modal_submit(modal)),
-            timeout=900
-        )
+        # Se não especificar canal, usa o atual
+        target_canal = canal or interaction.channel
         
-        if not hasattr(modal, 'submitted_data'):
-            return
-        
-        data = modal.submitted_data
-        
-        # Validação: precisa ter pelo menos título ou mensagem
-        if not data["titulo"] and not data["mensagem"]:
-            await interaction.followup.send(
-                "❌ Você precisa fornecer um título ou uma mensagem!",
-                ephemeral=True
-            )
-            return
-        
-        # Preview do anúncio
-        preview_embed = discord.Embed(
-            title="📋 Preview do Anúncio",
-            description="Clique em '📎 Enviar Foto/Vídeo/GIF' para instruções",
-            color=discord.Color.blue()
-        )
-        
-        if data["titulo"]:
-            preview_embed.add_field(
-                name="Título",
-                value=f"`{data['titulo']}`",
-                inline=False
-            )
-        
-        if data["mensagem"]:
-            msg_preview = data["mensagem"][:1024]
-            preview_embed.add_field(
-                name="Mensagem",
-                value=msg_preview,
-                inline=False
-            )
-            
-            if len(data["mensagem"]) > 1024:
-                preview_embed.add_field(
-                    name="(continua...)",
-                    value=data["mensagem"][1024:2048],
-                    inline=False
-                )
-        
-        if data["cor"]:
-            preview_embed.add_field(
-                name="Cor",
-                value=f"`{data['cor']}`",
-                inline=True
-            )
-        
-        preview_embed.set_footer(text="Você tem 10 minutos para adicionar anexos (opcional)")
-        
-        # View para anexos
-        anexos_view = AnexosView(interaction)
-        
-        msg_preview = await interaction.followup.send(
-            embed=preview_embed,
-            view=anexos_view,
-            ephemeral=True
-        )
-        
-        # Aguarda resposta dos botões
-        await asyncio.wait_for(anexos_view.wait(), timeout=600)
-        
-        if hasattr(anexos_view, 'cancelado') and anexos_view.cancelado:
-            await interaction.followup.send("❌ Operação cancelada.", ephemeral=True)
-            return
-        
-        # Coleta anexos enviados no canal (mensagens públicas do usuário)
+        # Coleta anexos enviados pelo usuário recentemente
         anexos = []
         try:
-            # Procura por mensagens do usuário APÓS o preview ser enviado
-            async for msg_check in interaction.channel.history(limit=100, after=msg_preview):
-                if msg_check.author == interaction.user and msg_check.attachments:
-                    for attachment in msg_check.attachments:
+            async for msg in interaction.channel.history(limit=20):
+                if msg.author == interaction.user and msg.attachments:
+                    for attachment in msg.attachments:
                         if len(anexos) < 10:
-                            # Valida tipo de arquivo
                             if any(attachment.filename.lower().endswith(ext) 
                                    for ext in ['.jpg', '.jpeg', '.png', '.gif', '.mp4', '.webm', '.mov']):
                                 file = await attachment.to_file()
                                 anexos.append(file)
+                    break  # Para no primeiro msg com anexo
         except Exception as e:
             logger.warning(f"Erro ao coletar anexos: {e}")
         
-        # Mostra quantos anexos foram coletados
+        # Envia o anúncio
         if anexos:
-            await interaction.followup.send(
-                f"✅ **{len(anexos)} anexo(s) encontrado(s)!**",
-                ephemeral=True
-            )
-        
-        # Escolher canal e tipo de envio
-        select_view = CanaiSelectView(interaction.guild, data)
+            await target_canal.send(mensagem, files=anexos)
+        else:
+            await target_canal.send(mensagem)
         
         await interaction.followup.send(
-            "📋 **Selecione o canal de destino** e o tipo de envio:",
-            embed=preview_embed,
-            view=select_view,
+            f"✅ Anúncio enviado em {target_canal.mention}!",
             ephemeral=True
         )
         
-        await asyncio.wait_for(select_view.wait(), timeout=300)
+        logger.info(f"Anúncio enviado por {interaction.user} em {target_canal.name}")
         
-        if not select_view.selected_channel or select_view.cancelled:
-            await interaction.followup.send("❌ Operação cancelada.", ephemeral=True)
-            return
-        
-        canal = select_view.selected_channel
-        use_embed = select_view.use_embed
-        
-        # Enviar anúncio com anexos
-        await _enviar_anuncio(interaction, canal, data, use_embed, anexos)
-        
-    except asyncio.TimeoutError:
-        try:
-            await interaction.followup.send(
-                "⏱️ Tempo expirou. Tente novamente.",
-                ephemeral=True
-            )
-        except:
-            pass
     except Exception as e:
         logger.error(f"Erro no comando anunciar: {e}", exc_info=True)
-        try:
-            await interaction.followup.send(
-                f"❌ Erro ao processar anúncio: {str(e)}",
-                ephemeral=True
-            )
-        except:
-            pass
-
-async def _wait_modal_submit(modal: AnuncioModal, timeout: int = 900):
-    """Aguarda o submit do modal"""
-    start_time = asyncio.get_event_loop().time()
-    while not hasattr(modal, 'submitted_data'):
-        if asyncio.get_event_loop().time() - start_time > timeout:
-            raise asyncio.TimeoutError()
-        await asyncio.sleep(0.1)
-
-class CanaiSelectView(discord.ui.View):
-    """View para selecionar canal e tipo de envio"""
-    
-    def __init__(self, guild: discord.Guild, data: dict):
-        super().__init__(timeout=300)
-        self.guild = guild
-        self.data = data
-        self.selected_channel = None
-        self.use_embed = False
-        self.cancelled = False
-        
-        # Adiciona select de canais
-        self.add_item(CanaisSelect(guild))
-    
-    @discord.ui.button(label="📝 Enviar como Texto", style=discord.ButtonStyle.secondary)
-    async def enviar_texto(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.selected_channel:
-            await interaction.response.send_message(
-                "❌ Selecione um canal primeiro!",
-                ephemeral=True
-            )
-            return
-        
-        self.use_embed = False
-        await interaction.response.defer(ephemeral=True)
-        self.stop()
-    
-    @discord.ui.button(label="🎨 Enviar como Embed", style=discord.ButtonStyle.primary)
-    async def enviar_embed(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.selected_channel:
-            await interaction.response.send_message(
-                "❌ Selecione um canal primeiro!",
-                ephemeral=True
-            )
-            return
-        
-        self.use_embed = True
-        await interaction.response.defer(ephemeral=True)
-        self.stop()
-    
-    @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.red)
-    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.cancelled = True
-        await interaction.response.defer(ephemeral=True)
-        self.stop()
-
-class CanaisSelect(discord.ui.Select):
-    """Select para escolher canal de destino"""
-    
-    def __init__(self, guild: discord.Guild):
-        self.guild = guild
-        options = []
-        
-        # Limita a 25 opções (limite do Discord)
-        for channel in list(guild.text_channels)[:25]:
-            options.append(
-                discord.SelectOption(
-                    label=channel.name,
-                    value=str(channel.id),
-                    emoji="📝"
-                )
-            )
-        
-        if not options:
-            options.append(
-                discord.SelectOption(
-                    label="Nenhum canal disponível",
-                    value="0",
-                    emoji="❌"
-                )
-            )
-        
-        super().__init__(
-            placeholder="Selecione o canal...",
-            min_values=1,
-            max_values=1,
-            options=options
-        )
-    
-    async def callback(self, interaction: discord.Interaction):
-        channel_id = int(self.values[0])
-        channel = self.guild.get_channel(channel_id)
-        
-        if channel:
-            self.view.selected_channel = channel
-            await interaction.response.send_message(
-                f"✅ Canal selecionado: {channel.mention}",
-                ephemeral=True
-            )
-        else:
-            await interaction.response.send_message(
-                "❌ Canal não encontrado!",
-                ephemeral=True
-            )
-
-async def _enviar_anuncio(interaction: discord.Interaction, canal: discord.TextChannel, data: dict, use_embed: bool, anexos: list):
-    """Envia o anúncio no canal selecionado"""
-    try:
-        if use_embed:
-            # Enviar como Embed
-            embed = discord.Embed(
-                title=data.get("titulo") or "Anúncio",
-                description=data.get("mensagem") or "",
-                color=discord.Color.blue()
-            )
-            
-            # Tenta interpretar a cor se fornecida
-            if data.get("cor"):
-                try:
-                    cor_str = data["cor"].lower().strip()
-                    if cor_str.startswith("#"):
-                        # HEX color
-                        embed.color = discord.Color(int(cor_str[1:], 16))
-                    else:
-                        # Named color
-                        color_map = {
-                            "blue": discord.Color.blue(),
-                            "red": discord.Color.red(),
-                            "green": discord.Color.green(),
-                            "yellow": discord.Color.gold(),
-                            "purple": discord.Color.purple(),
-                            "orange": discord.Color.orange(),
-                            "pink": discord.Color.magenta(),
-                        }
-                        embed.color = color_map.get(cor_str, discord.Color.blue())
-                except Exception:
-                    pass
-            
-            # Enviar com anexos se houver
-            if anexos:
-                await canal.send(embed=embed, files=anexos)
-            else:
-                await canal.send(embed=embed)
-        else:
-            # Enviar como Texto
-            content = ""
-            if data.get("titulo"):
-                content += f"**{data['titulo']}**\n"
-            if data.get("mensagem"):
-                content += data["mensagem"]
-            
-            if anexos:
-                await canal.send(content or "Anúncio enviado", files=anexos)
-            else:
-                await canal.send(content or "Anúncio enviado")
-        
-        # Resposta de sucesso
-        await interaction.followup.send(
-            f"✅ Anúncio enviado com sucesso em {canal.mention}!",
-            ephemeral=True
-        )
-        
-        logger.info(f"Anúncio enviado por {interaction.user} em {canal.name}")
-        
-    except Exception as e:
-        logger.error(f"Erro ao enviar anúncio: {e}", exc_info=True)
         await interaction.followup.send(
             f"❌ Erro ao enviar anúncio: {str(e)}",
+            ephemeral=True
+        )
+
+@bot.tree.command(name="tag_manual", description="[ADMIN] Concede TAG manual a um usuário")
+@app_commands.guild_only()
+@app_commands.describe(
+    usuario="Usuário que receberá a TAG",
+    quantidade="Quantidade de fichas (padrão: 1)"
+)
+async def tag_manual(
+    interaction: discord.Interaction,
+    usuario: discord.User,
+    quantidade: Optional[int] = 1
+):
+    if not is_admin_or_moderator(interaction):
+        await interaction.response.send_message(
+            "❌ Você não tem permissão para usar este comando.",
+            ephemeral=True
+        )
+        return
+    
+    if quantidade <= 0:
+        await interaction.response.send_message(
+            "❌ A quantidade deve ser maior que 0!",
+            ephemeral=True
+        )
+        return
+    
+    if not db.is_registered(usuario.id):
+        await interaction.response.send_message(
+            f"❌ {usuario.mention} não está inscrito no sorteio!",
+            ephemeral=True
+        )
+        return
+    
+    try:
+        db.add_manual_tag(usuario.id, quantidade)
+        
+        await interaction.response.send_message(
+            f"✅ {usuario.mention} recebeu +{quantidade} TAG manual!",
+            ephemeral=True
+        )
+        logger.info(f"TAG manual de {quantidade} concedida a {usuario} por {interaction.user}")
+    except Exception as e:
+        logger.error(f"Erro ao conceder TAG manual: {e}", exc_info=True)
+        await interaction.response.send_message(
+            f"❌ Erro ao conceder TAG: {str(e)}",
+            ephemeral=True
+        )
+
+@bot.tree.command(name="sync", description="[ADMIN] Sincroniza comandos com Discord")
+async def sync(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "❌ Você não tem permissão para usar este comando.",
+            ephemeral=True
+        )
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        synced = await bot.tree.sync()
+        await interaction.followup.send(
+            f"✅ Sincronizados {len(synced)} comandos com sucesso!",
+            ephemeral=True
+        )
+        logger.info(f"Comandos sincronizados por {interaction.user} ({len(synced)} comandos)")
+    except Exception as e:
+        logger.error(f"Erro ao sincronizar comandos: {e}", exc_info=True)
+        await interaction.followup.send(
+            f"❌ Erro ao sincronizar: {str(e)}",
             ephemeral=True
         )
 
