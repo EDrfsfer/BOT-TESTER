@@ -1422,13 +1422,14 @@ class AnuncioModal(discord.ui.Modal, title="Criar Anúncio"):
         await interaction.response.defer(ephemeral=True)
 
 class AnexosView(discord.ui.View):
-    """View com botão para adicionar anexos"""
+    """View com botões para anexos e continuação"""
     
     def __init__(self, interaction: discord.Interaction):
         super().__init__(timeout=600)
         self.interaction_user = interaction.user
         self.anexos = []
         self.interaction = interaction
+        self.arquivo_adicionado = False
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.interaction_user.id:
@@ -1439,21 +1440,17 @@ class AnexosView(discord.ui.View):
             return False
         return True
     
-    @discord.ui.button(label="📎 Adicionar Foto/Vídeo/GIF", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="📎 Enviar Foto/Vídeo/GIF", style=discord.ButtonStyle.blurple)
     async def adicionar_anexo(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Abre um modal para upload de arquivo"""
-        
-        class UploadModal(discord.ui.Modal, title="Upload de Arquivo"):
-            async def on_submit(self, modal_interaction: discord.Interaction):
-                # Apenas mostra instrução
-                await modal_interaction.response.send_message(
-                    f"📤 **Anexos adicionados**: {len(self.view.anexos)}/10\n\n"
-                    "Envie a imagem/vídeo/gif como resposta neste canal agora!",
-                    ephemeral=True
-                )
-        
-        upload_modal = UploadModal()
-        await interaction.response.send_modal(upload_modal)
+        """Instrui o usuário a enviar arquivo como mensagem"""
+        await interaction.response.send_message(
+            "📤 **Como adicionar anexos:**\n\n"
+            "1️⃣ Envie uma mensagem **normal** neste canal com a imagem/vídeo/gif\n"
+            "2️⃣ Clique no botão ✅ **Continuar** após enviar\n\n"
+            "⚠️ Você tem **até 10 anexos** (fotos/vídeos/gifs)",
+            ephemeral=True
+        )
+        self.arquivo_adicionado = True
     
     @discord.ui.button(label="✅ Continuar", style=discord.ButtonStyle.green)
     async def continuar(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1505,7 +1502,7 @@ async def anunciar(interaction: discord.Interaction):
         # Preview do anúncio
         preview_embed = discord.Embed(
             title="📋 Preview do Anúncio",
-            description="Clique em 'Adicionar' para enviar fotos/vídeos/gifs",
+            description="Clique em '📎 Enviar Foto/Vídeo/GIF' para instruções",
             color=discord.Color.blue()
         )
         
@@ -1538,12 +1535,12 @@ async def anunciar(interaction: discord.Interaction):
                 inline=True
             )
         
-        preview_embed.set_footer(text="Você tem 10 minutos para adicionar anexos")
+        preview_embed.set_footer(text="Você tem 10 minutos para adicionar anexos (opcional)")
         
         # View para anexos
         anexos_view = AnexosView(interaction)
         
-        msg = await interaction.followup.send(
+        msg_preview = await interaction.followup.send(
             embed=preview_embed,
             view=anexos_view,
             ephemeral=True
@@ -1556,16 +1553,28 @@ async def anunciar(interaction: discord.Interaction):
             await interaction.followup.send("❌ Operação cancelada.", ephemeral=True)
             return
         
-        # Coleta anexos enviados no canal
+        # Coleta anexos enviados no canal (mensagens públicas do usuário)
+        anexos = []
         try:
-            async for msg_check in interaction.channel.history(limit=50, after=msg):
+            # Procura por mensagens do usuário APÓS o preview ser enviado
+            async for msg_check in interaction.channel.history(limit=100, after=msg_preview):
                 if msg_check.author == interaction.user and msg_check.attachments:
                     for attachment in msg_check.attachments:
-                        if len(anexos_view.anexos) < 10:
-                            file = await attachment.to_file()
-                            anexos_view.anexos.append(file)
-        except:
-            pass
+                        if len(anexos) < 10:
+                            # Valida tipo de arquivo
+                            if any(attachment.filename.lower().endswith(ext) 
+                                   for ext in ['.jpg', '.jpeg', '.png', '.gif', '.mp4', '.webm', '.mov']):
+                                file = await attachment.to_file()
+                                anexos.append(file)
+        except Exception as e:
+            logger.warning(f"Erro ao coletar anexos: {e}")
+        
+        # Mostra quantos anexos foram coletados
+        if anexos:
+            await interaction.followup.send(
+                f"✅ **{len(anexos)} anexo(s) encontrado(s)!**",
+                ephemeral=True
+            )
         
         # Escolher canal e tipo de envio
         select_view = CanaiSelectView(interaction.guild, data)
@@ -1587,7 +1596,7 @@ async def anunciar(interaction: discord.Interaction):
         use_embed = select_view.use_embed
         
         # Enviar anúncio com anexos
-        await _enviar_anuncio(interaction, canal, data, use_embed, anexos_view.anexos)
+        await _enviar_anuncio(interaction, canal, data, use_embed, anexos)
         
     except asyncio.TimeoutError:
         try:
