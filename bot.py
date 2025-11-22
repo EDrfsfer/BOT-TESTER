@@ -1702,6 +1702,7 @@ async def anunciar(interaction: discord.Interaction):
             select_view = CanaiSelectView(interaction.guild, data)
             
             await interaction.followup.send(
+                "📋 **Selecione o canal de destino** e o tipo de envio:",
                 embed=preview_embed,
                 view=select_view,
                 ephemeral=True
@@ -1749,65 +1750,108 @@ async def anunciar(interaction: discord.Interaction):
         except:
             pass
 
-@bot.tree.command(name="tag_manual", description="[ADMIN] Concede TAG manual a um usuário")
-@app_commands.guild_only()
-@app_commands.describe(
-    usuario="Usuário para receber TAG manual",
-    quantidade="Quantidade de fichas da TAG"
-)
-async def tag_manual(interaction: discord.Interaction, usuario: discord.User, quantidade: int):
-    if not is_admin_or_moderator(interaction):
-        await interaction.response.send_message(
-            "❌ Você não tem permissão para usar este comando.",
-            ephemeral=True
-        )
-        return
-    
-    if not db.is_registered(usuario.id):
-        await interaction.response.send_message(
-            f"❌ {usuario.mention} não está inscrito no sorteio.",
-            ephemeral=True
-        )
-        return
-    
-    if quantidade <= 0:
-        await interaction.response.send_message(
-            "❌ A quantidade deve ser maior que 0!",
-            ephemeral=True
-        )
-        return
-    
-    db.set_manual_tag(usuario.id, quantidade)
-    
-    await interaction.response.send_message(
-        f"✅ {usuario.mention} recebeu **{quantidade}** ficha(s) de TAG manual!",
-        ephemeral=True
-    )
-    logger.info(f"TAG manual concedida: {usuario.id} ({quantidade} fichas) por {interaction.user}")
+async def _wait_modal_submit(modal: AnuncioModal, timeout: int = 900):
+    """Aguarda o submit do modal"""
+    start_time = asyncio.get_event_loop().time()
+    while not hasattr(modal, 'submitted_data'):
+        if asyncio.get_event_loop().time() - start_time > timeout:
+            raise asyncio.TimeoutError()
+        await asyncio.sleep(0.1)
 
-@bot.tree.command(name="sync", description="[ADMIN] Sincroniza comandos do bot")
-async def sync(interaction: discord.Interaction):
-    if not is_admin_or_moderator(interaction):
-        await interaction.response.send_message(
-            "❌ Você não tem permissão para usar este comando.",
-            ephemeral=True
-        )
-        return
+class CanaiSelectView(discord.ui.View):
+    """View para selecionar canal e tipo de envio"""
     
-    await interaction.response.defer(ephemeral=True)
-    try:
-        synced = await interaction.client.tree.sync()
-        await interaction.followup.send(
-            f"✅ {len(synced)} comandos sincronizados!",
-            ephemeral=True
+    def __init__(self, guild: discord.Guild, data: dict):
+        super().__init__(timeout=300)
+        self.guild = guild
+        self.data = data
+        self.selected_channel = None
+        self.use_embed = False
+        self.cancelled = False
+        
+        # Adiciona select de canais
+        self.add_item(CanaisSelect(guild))
+    
+    @discord.ui.button(label="📝 Enviar como Texto", style=discord.ButtonStyle.secondary)
+    async def enviar_texto(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected_channel:
+            await interaction.response.send_message(
+                "❌ Selecione um canal primeiro!",
+                ephemeral=True
+            )
+            return
+        
+        self.use_embed = False
+        await interaction.response.defer(ephemeral=True)
+        self.stop()
+    
+    @discord.ui.button(label="🎨 Enviar como Embed", style=discord.ButtonStyle.primary)
+    async def enviar_embed(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected_channel:
+            await interaction.response.send_message(
+                "❌ Selecione um canal primeiro!",
+                ephemeral=True
+            )
+            return
+        
+        self.use_embed = True
+        await interaction.response.defer(ephemeral=True)
+        self.stop()
+    
+    @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.red)
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.cancelled = True
+        await interaction.response.defer(ephemeral=True)
+        self.stop()
+
+class CanaisSelect(discord.ui.Select):
+    """Select para escolher canal de destino"""
+    
+    def __init__(self, guild: discord.Guild):
+        self.guild = guild
+        options = []
+        
+        # Limita a 25 opções (limite do Discord)
+        for channel in list(guild.text_channels)[:25]:
+            options.append(
+                discord.SelectOption(
+                    label=channel.name,
+                    value=str(channel.id),
+                    emoji="📝"
+                )
+            )
+        
+        if not options:
+            options.append(
+                discord.SelectOption(
+                    label="Nenhum canal disponível",
+                    value="0",
+                    emoji="❌"
+                )
+            )
+        
+        super().__init__(
+            placeholder="Selecione o canal...",
+            min_values=1,
+            max_values=1,
+            options=options
         )
-        logger.info(f"Comandos sincronizados por {interaction.user}")
-    except Exception as e:
-        logger.error(f"Erro ao sincronizar: {e}", exc_info=True)
-        await interaction.followup.send(
-            f"❌ Erro ao sincronizar: {str(e)}",
-            ephemeral=True
-        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        channel_id = int(self.values[0])
+        channel = self.guild.get_channel(channel_id)
+        
+        if channel:
+            self.view.selected_channel = channel
+            await interaction.response.send_message(
+                f"✅ Canal selecionado: {channel.mention}",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "❌ Canal não encontrado!",
+                ephemeral=True
+            )
 
 # Inicia threads Flask
 if __name__ == "__main__":
