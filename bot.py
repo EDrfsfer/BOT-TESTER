@@ -1411,7 +1411,6 @@ async def canal_autocomplete(
     mensagem="Mensagem do anúncio (quebra de linha = \\n)",
     canal="Canal onde enviar (opcional - usa canal atual se não especificado)",
     embed="Enviar como embed? (True/False)",
-    titulo="Título do embed (se embed=True)",
     cor="Cor do embed (nome ou hex, ex: red, #FF0000)",
     imagem="Imagem ou vídeo opcional"
 )
@@ -1421,7 +1420,6 @@ async def anunciar(
     mensagem: str,
     canal: Optional[str] = None,
     embed: Optional[bool] = False,
-    titulo: Optional[str] = None,
     cor: Optional[str] = None,
     imagem: Optional[discord.Attachment] = None
 ):
@@ -1487,7 +1485,6 @@ async def anunciar(
                     embed_color = discord.Color.blue()
             
             embed_msg = discord.Embed(
-                title=titulo or "Anúncio",
                 description=mensagem_formatada,
                 color=embed_color
             )
