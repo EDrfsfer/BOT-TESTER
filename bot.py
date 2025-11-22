@@ -1409,15 +1409,23 @@ async def canal_autocomplete(
 @app_commands.guild_only()
 @app_commands.describe(
     mensagem="Mensagem do anúncio (quebra de linha = \\n)",
-    canal="Canal onde enviar (opcional - usa canal atual se não especificado)"
+    canal="Canal onde enviar (opcional - usa canal atual se não especificado)",
+    embed="Enviar como embed? (True/False)",
+    titulo="Título do embed (se embed=True)",
+    cor="Cor do embed (nome ou hex, ex: red, #FF0000)",
+    imagem="Imagem ou vídeo opcional"
 )
 @app_commands.autocomplete(canal=canal_autocomplete)
 async def anunciar(
     interaction: discord.Interaction,
     mensagem: str,
-    canal: Optional[str] = None
+    canal: Optional[str] = None,
+    embed: Optional[bool] = False,
+    titulo: Optional[str] = None,
+    cor: Optional[str] = None,
+    imagem: Optional[discord.Attachment] = None
 ):
-    """Comando simples para anúncios"""
+    """Comando completo para anúncios"""
     
     if not is_admin_or_moderator(interaction):
         await interaction.response.send_message(
@@ -1446,26 +1454,57 @@ async def anunciar(
             except Exception:
                 pass
         
-        # Coleta anexos enviados pelo usuário recentemente
-        anexos = []
-        try:
-            async for msg in interaction.channel.history(limit=20):
-                if msg.author == interaction.user and msg.attachments:
-                    for attachment in msg.attachments:
-                        if len(anexos) < 10:
-                            if any(attachment.filename.lower().endswith(ext) 
-                                   for ext in ['.jpg', '.jpeg', '.png', '.gif', '.mp4', '.webm', '.mov']):
-                                file = await attachment.to_file()
-                                anexos.append(file)
-                    break  # Para no primeiro msg com anexo
-        except Exception as e:
-            logger.warning(f"Erro ao coletar anexos: {e}")
+        # Preparar arquivo se houver
+        files = []
+        if imagem:
+            file = await imagem.to_file()
+            files.append(file)
         
-        # Envia o anúncio
-        if anexos:
-            await target_canal.send(mensagem_formatada, files=anexos)
+        # Montar a mensagem
+        if embed:
+            # Criar embed
+            embed_color = discord.Color.blue()
+            
+            # Tentar parsear cor
+            if cor:
+                try:
+                    if cor.startswith("#"):
+                        embed_color = discord.Color(int(cor.replace("#", ""), 16))
+                    else:
+                        # Cores nomeadas
+                        cores = {
+                            "red": discord.Color.red(),
+                            "green": discord.Color.green(),
+                            "blue": discord.Color.blue(),
+                            "yellow": discord.Color.yellow(),
+                            "purple": discord.Color.purple(),
+                            "orange": discord.Color.orange(),
+                            "pink": discord.Color.magenta(),
+                            "gold": discord.Color.gold(),
+                        }
+                        embed_color = cores.get(cor.lower(), discord.Color.blue())
+                except Exception:
+                    embed_color = discord.Color.blue()
+            
+            embed_msg = discord.Embed(
+                title=titulo or "Anúncio",
+                description=mensagem_formatada,
+                color=embed_color
+            )
+            
+            if imagem and imagem.content_type.startswith("image"):
+                embed_msg.set_image(url=f"attachment://{imagem.filename}")
+            
+            if files:
+                await target_canal.send(embed=embed_msg, files=files)
+            else:
+                await target_canal.send(embed=embed_msg)
         else:
-            await target_canal.send(mensagem_formatada)
+            # Mensagem simples
+            if files:
+                await target_canal.send(mensagem_formatada, files=files)
+            else:
+                await target_canal.send(mensagem_formatada)
         
         await interaction.followup.send(
             f"✅ Anúncio enviado em {target_canal.mention}!",
