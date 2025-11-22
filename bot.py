@@ -1389,7 +1389,7 @@ async def chat(
         logger.info(f"Chat desbloqueado por {interaction.user}")
 
 class AnuncioModal(discord.ui.Modal, title="Criar Anúncio"):
-    """Modal para criar anúncios com suporte a quebras de linha"""
+    """Modal para criar anúncios com suporte a quebras de linha e anexos"""
     
     titulo = discord.ui.TextInput(
         label="Título (opcional)",
@@ -1399,9 +1399,9 @@ class AnuncioModal(discord.ui.Modal, title="Criar Anúncio"):
     )
     
     mensagem = discord.ui.TextInput(
-        label="Mensagem",
+        label="Mensagem (opcional)",
         placeholder="Digite a mensagem com quebras de linha (use Enter)",
-        required=True,
+        required=False,
         max_length=4000,
         style=discord.TextStyle.long
     )
@@ -1416,95 +1416,89 @@ class AnuncioModal(discord.ui.Modal, title="Criar Anúncio"):
     async def on_submit(self, interaction: discord.Interaction):
         self.submitted_data = {
             "titulo": self.titulo.value.strip() if self.titulo.value else None,
-            "mensagem": self.mensagem.value.strip(),
+            "mensagem": self.mensagem.value.strip() if self.mensagem.value else None,
             "cor": self.cor.value.strip() if self.cor.value else None
         }
         await interaction.response.defer(ephemeral=True)
 
-class CanaisSelect(discord.ui.Select):
-    """Select dropdown para escolher canal"""
-    
-    def __init__(self, guild: discord.Guild):
-        canais = [ch for ch in guild.text_channels if ch.permissions_for(guild.me).send_messages]
-        
-        options = [
-            discord.SelectOption(
-                label=ch.name[:100],
-                value=str(ch.id),
-                emoji="📢"
-            )
-            for ch in canais[:25]
-        ]
-        
-        super().__init__(
-            placeholder="Escolha o canal para enviar...",
-            min_values=1,
-            max_values=1,
-            options=options
-        )
-    
-    async def callback(self, interaction: discord.Interaction):
-        channel_id = int(self.values[0])
-        canal = interaction.guild.get_channel(channel_id)
-        
-        self.view.selected_channel = canal
-        
-        tipo_view = TipoAnuncioView()
-        
-        await interaction.response.send_message(
-            f"✅ Canal selecionado: {canal.mention}\n\nAgora escolha o tipo de envio:",
-            view=tipo_view,
-            ephemeral=True
-        )
-        
-        await tipo_view.wait()
-        self.view.use_embed = tipo_view.use_embed
-        self.view.stop()
-
-class TipoAnuncioView(discord.ui.View):
-    """View para escolher tipo de anúncio"""
+class AnexoView(discord.ui.View):
+    """View para upload de anexos"""
     
     def __init__(self):
         super().__init__(timeout=300)
-        self.use_embed = False
+        self.anexos = []
+        self.finalizado = False
     
-    @discord.ui.button(label="📝 Texto Simples", style=discord.ButtonStyle.green)
-    async def texto(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="📎 Adicionar Anexo", style=discord.ButtonStyle.gray)
+    async def adicionar_anexo(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "⚠️ Para enviar anexos, por favor envie uma mensagem neste canal com a imagem/vídeo/gif desejado.\n"
+            "Clique em ✅ quando terminar de enviar todos os anexos.",
+            ephemeral=True
+        )
+    
+    @discord.ui.button(label="✅ Continuar", style=discord.ButtonStyle.green)
+    async def continuar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        self.use_embed = False
+        self.finalizado = True
         self.stop()
     
-    @discord.ui.button(label="🎨 Com Embed", style=discord.ButtonStyle.blurple)
-    async def embed(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.red)
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        self.use_embed = True
+        self.finalizado = False
         self.stop()
 
-class CanaiSelectView(discord.ui.View):
-    """Select para escolher canal e tipo de envio"""
+class AnuncioAnexosView(discord.ui.View):
+    """View para gerenciar anexos do anúncio"""
     
-    def __init__(self, guild: discord.Guild, modal_data: dict):
+    def __init__(self, interaction: discord.Interaction):
         super().__init__(timeout=300)
-        self.guild = guild
-        self.modal_data = modal_data
-        self.selected_channel = None
-        self.use_embed = False
-        self.cancelled = False
-        
-        self.add_item(CanaisSelect(guild))
+        self.interaction_user = interaction.user
+        self.anexos = []
+        self.enviando = False
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.interaction_user.id:
+            await interaction.response.send_message(
+                "❌ Você não pode usar este botão!",
+                ephemeral=True
+            )
+            return False
         return True
+    
+    @discord.ui.button(label="📎 Adicionar Anexo", style=discord.ButtonStyle.gray)
+    async def adicionar_anexo(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "📤 Envie uma imagem, vídeo ou GIF neste canal.\n"
+            f"**Anexos adicionados**: {len(self.anexos)}/10",
+            ephemeral=True
+        )
+    
+    @discord.ui.button(label="✅ Continuar", style=discord.ButtonStyle.green)
+    async def continuar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.anexos and not hasattr(self, 'tem_mensagem'):
+            await interaction.response.send_message(
+                "❌ Você precisa enviar no mínimo uma mensagem ou um anexo!",
+                ephemeral=True
+            )
+            return
+        
+        await interaction.response.defer(ephemeral=True)
+        self.stop()
+    
+    @discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.red)
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        self.cancelado = True
+        self.stop()
 
-async def _wait_modal_submit(modal):
-    """Aguarda o submit do modal"""
-    while not hasattr(modal, 'submitted_data'):
-        await asyncio.sleep(0.1)
-
-async def _enviar_anuncio(interaction: discord.Interaction, canal: discord.TextChannel, data: dict, use_embed: bool):
+async def _enviar_anuncio(interaction: discord.Interaction, canal: discord.TextChannel, data: dict, use_embed: bool, anexos: list = None):
     """Envia o anúncio no canal escolhido"""
     try:
-        if use_embed:
+        anexos = anexos or []
+        
+        if use_embed and (data["titulo"] or data["mensagem"]):
             try:
                 cor_obj = utils.parse_color(data["cor"]) if data["cor"] else discord.Color.blue()
             except:
@@ -1512,25 +1506,43 @@ async def _enviar_anuncio(interaction: discord.Interaction, canal: discord.TextC
             
             embed_obj = discord.Embed(
                 title=data["titulo"] or "Anúncio",
-                description=data["mensagem"],
+                description=data["mensagem"] or "",
                 color=cor_obj
             )
             
-            await canal.send(embed=embed_obj)
-        else:
+            if anexos:
+                await canal.send(embed=embed_obj, files=anexos)
+            else:
+                await canal.send(embed=embed_obj)
+        
+        elif not use_embed and (data["titulo"] or data["mensagem"]):
             conteudo = ""
             if data["titulo"]:
                 conteudo = f"**{data['titulo']}**\n\n"
-            conteudo += data["mensagem"]
+            if data["mensagem"]:
+                conteudo += data["mensagem"]
             
-            await canal.send(conteudo)
+            if anexos:
+                await canal.send(conteudo if conteudo else None, files=anexos)
+            else:
+                await canal.send(conteudo)
+        
+        elif anexos:
+            # Apenas anexos
+            await canal.send(files=anexos)
+        else:
+            await interaction.followup.send(
+                "❌ Nenhum conteúdo para enviar!",
+                ephemeral=True
+            )
+            return
         
         await interaction.followup.send(
             f"✅ Anúncio enviado com sucesso em {canal.mention}!",
             ephemeral=True
         )
         
-        logger.info(f"Anúncio enviado em {canal.name} por {interaction.user}")
+        logger.info(f"Anúncio enviado em {canal.name} por {interaction.user} ({len(anexos)} anexo(s))")
         
     except Exception as e:
         logger.error(f"Erro ao enviar anúncio: {e}", exc_info=True)
@@ -1538,11 +1550,18 @@ async def _enviar_anuncio(interaction: discord.Interaction, canal: discord.TextC
             f"❌ Erro ao enviar: {str(e)}",
             ephemeral=True
         )
+        
+        # Limpa arquivos temporários
+        for file in (anexos or []):
+            try:
+                file.close()
+            except:
+                pass
 
-@bot.tree.command(name="anunciar", description="[ADMIN] Envia um anúncio com modal")
+@bot.tree.command(name="anunciar", description="[ADMIN] Envia um anúncio com modal e anexos")
 @app_commands.guild_only()
 async def anunciar(interaction: discord.Interaction):
-    """Comando melhorado para anúncios com modal e quebras de linha"""
+    """Comando melhorado para anúncios com modal, quebras de linha e anexos"""
     
     if not is_admin_or_moderator(interaction):
         await interaction.response.send_message(
@@ -1552,9 +1571,11 @@ async def anunciar(interaction: discord.Interaction):
         return
     
     try:
+        # Abre o modal
         modal = AnuncioModal()
         await interaction.response.send_modal(modal)
         
+        # Aguarda submit do modal
         await asyncio.wait_for(
             asyncio.create_task(_wait_modal_submit(modal)),
             timeout=900
@@ -1565,58 +1586,151 @@ async def anunciar(interaction: discord.Interaction):
         
         data = modal.submitted_data
         
-        preview_embed = discord.Embed(
-            title="📋 Preview do Anúncio",
-            description="Escolha como enviar:",
-            color=discord.Color.blue()
-        )
-        
-        if data["titulo"]:
-            preview_embed.add_field(
-                name="Título",
-                value=f"`{data['titulo']}`",
-                inline=False
+        # Validação: precisa ter pelo menos título ou mensagem
+        if not data["titulo"] and not data["mensagem"]:
+            await interaction.followup.send(
+                "❌ Você precisa fornecer um título ou uma mensagem!",
+                ephemeral=True
             )
-        
-        preview_embed.add_field(
-            name="Mensagem",
-            value=data["mensagem"][:1024],
-            inline=False
-        )
-        
-        if len(data["mensagem"]) > 1024:
-            preview_embed.add_field(
-                name="(continua...)",
-                value=data["mensagem"][1024:2048],
-                inline=False
-            )
-        
-        if data["cor"]:
-            preview_embed.add_field(
-                name="Cor",
-                value=f"`{data['cor']}`",
-                inline=True
-            )
-        
-        select_view = CanaiSelectView(interaction.guild, data)
-        
-        await interaction.followup.send(
-            embed=preview_embed,
-            view=select_view,
-            ephemeral=True
-        )
-        
-        await asyncio.wait_for(select_view.wait(), timeout=300)
-        
-        if not select_view.selected_channel or select_view.cancelled:
-            await interaction.followup.send("❌ Operação cancelada.", ephemeral=True)
             return
         
-        canal = select_view.selected_channel
-        use_embed = select_view.use_embed
-        
-        await _enviar_anuncio(interaction, canal, data, use_embed)
-        
+        # Cria canal privado temporário para receber anexos
+        try:
+            # Cria channel privado
+            overwrites = {
+                interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                interaction.guild.me: discord.PermissionOverwrite(view_channel=True)
+            }
+            
+            temp_channel = await interaction.guild.create_text_channel(
+                f"anuncio-temp-{interaction.user.id}",
+                overwrites=overwrites,
+                category=interaction.channel.category if hasattr(interaction.channel, 'category') else None
+            )
+            
+            # Preview do anúncio
+            preview_embed = discord.Embed(
+                title="📋 Preview do Anúncio",
+                description="Escolha como enviar:",
+                color=discord.Color.blue()
+            )
+            
+            if data["titulo"]:
+                preview_embed.add_field(
+                    name="Título",
+                    value=f"`{data['titulo']}`",
+                    inline=False
+                )
+            
+            if data["mensagem"]:
+                msg_preview = data["mensagem"][:1024]
+                preview_embed.add_field(
+                    name="Mensagem",
+                    value=msg_preview,
+                    inline=False
+                )
+                
+                if len(data["mensagem"]) > 1024:
+                    preview_embed.add_field(
+                        name="(continua...)",
+                        value=data["mensagem"][1024:2048],
+                        inline=False
+                    )
+            
+            if data["cor"]:
+                preview_embed.add_field(
+                    name="Cor",
+                    value=f"`{data['cor']}`",
+                    inline=True
+                )
+            
+            preview_embed.set_footer(text="Você tem 10 minutos para enviar anexos")
+            
+            # View para anexos
+            anexos_view = AnuncioAnexosView(interaction)
+            
+            msg_preview = await interaction.followup.send(
+                embed=preview_embed,
+                ephemeral=True
+            )
+            
+            msg_anexos = await temp_channel.send(
+                f"📤 **Envie anexos aqui** (máx 10 imagens/vídeos/gifs)\n"
+                f"Clique em ✅ no preview quando terminar.",
+                view=anexos_view
+            )
+            
+            # Aguarda anexos por 10 minutos
+            start_time = asyncio.get_event_loop().time()
+            timeout_secs = 600
+            
+            while not anexos_view._View__stopped.is_set():
+                # Coleta mensagens com anexos no canal temporário
+                try:
+                    async for msg in temp_channel.history(limit=50, after=msg_anexos):
+                        if msg.author == interaction.user and msg.attachments:
+                            for attachment in msg.attachments:
+                                if len(anexos_view.anexos) < 10:
+                                    file = await attachment.to_file()
+                                    anexos_view.anexos.append(file)
+                except:
+                    pass
+                
+                # Verifica timeout
+                if asyncio.get_event_loop().time() - start_time > timeout_secs:
+                    anexos_view.stop()
+                    break
+                
+                await asyncio.sleep(1)
+            
+            # Deletar canal temporário
+            try:
+                await temp_channel.delete()
+            except:
+                pass
+            
+            if hasattr(anexos_view, 'cancelado') and anexos_view.cancelado:
+                await interaction.followup.send("❌ Operação cancelada.", ephemeral=True)
+                return
+            
+            # Marcar que tem mensagem
+            if data["titulo"] or data["mensagem"]:
+                anexos_view.tem_mensagem = True
+            
+            # Escolher canal e tipo de envio
+            select_view = CanaiSelectView(interaction.guild, data)
+            
+            await interaction.followup.send(
+                embed=preview_embed,
+                view=select_view,
+                ephemeral=True
+            )
+            
+            await asyncio.wait_for(select_view.wait(), timeout=300)
+            
+            if not select_view.selected_channel or select_view.cancelled:
+                await interaction.followup.send("❌ Operação cancelada.", ephemeral=True)
+                return
+            
+            canal = select_view.selected_channel
+            use_embed = select_view.use_embed
+            
+            # Enviar anúncio com anexos
+            await _enviar_anuncio(interaction, canal, data, use_embed, anexos_view.anexos)
+            
+        except asyncio.TimeoutError:
+            await interaction.followup.send(
+                "⏱️ Tempo expirou para adicionar anexos.",
+                ephemeral=True
+            )
+        except Exception as e:
+            logger.error(f"Erro no canal temporário: {e}", exc_info=True)
+            await interaction.followup.send(
+                f"❌ Erro ao processar anexos: {str(e)}",
+                ephemeral=True
+            )
+    
     except asyncio.TimeoutError:
         try:
             await interaction.followup.send(
