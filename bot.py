@@ -1388,16 +1388,34 @@ async def chat(
         )
         logger.info(f"Chat desbloqueado por {interaction.user}")
 
+async def canal_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Autocomplete para listar canais disponíveis"""
+    if not interaction.guild:
+        return []
+    
+    # Filtra canais por nome (case-insensitive)
+    choices = [
+        app_commands.Choice(name=channel.name, value=str(channel.id))
+        for channel in interaction.guild.text_channels
+        if current.lower() in channel.name.lower()
+    ]
+    
+    return choices[:25]  # Discord limita a 25 opções
+
 @bot.tree.command(name="anunciar", description="[ADMIN] Envia um anúncio com anexos")
 @app_commands.guild_only()
 @app_commands.describe(
-    mensagem="Mensagem do anúncio (use quebras de linha)",
+    mensagem="Mensagem do anúncio (quebra de linha = \\n)",
     canal="Canal onde enviar (opcional - usa canal atual se não especificado)"
 )
+@app_commands.autocomplete(canal=canal_autocomplete)
 async def anunciar(
     interaction: discord.Interaction,
     mensagem: str,
-    canal: Optional[discord.TextChannel] = None
+    canal: Optional[str] = None
 ):
     """Comando simples para anúncios"""
     
@@ -1411,8 +1429,22 @@ async def anunciar(
     try:
         await interaction.response.defer(ephemeral=True)
         
+        # Converte quebras de linha
+        mensagem_formatada = mensagem.replace("\\n", "\n")
+        
         # Se não especificar canal, usa o atual
-        target_canal = canal or interaction.channel
+        target_canal = interaction.channel
+        if canal:
+            try:
+                target_canal = interaction.guild.get_channel(int(canal))
+                if not target_canal:
+                    await interaction.followup.send(
+                        "❌ Canal não encontrado!",
+                        ephemeral=True
+                    )
+                    return
+            except Exception:
+                pass
         
         # Coleta anexos enviados pelo usuário recentemente
         anexos = []
@@ -1431,9 +1463,9 @@ async def anunciar(
         
         # Envia o anúncio
         if anexos:
-            await target_canal.send(mensagem, files=anexos)
+            await target_canal.send(mensagem_formatada, files=anexos)
         else:
-            await target_canal.send(mensagem)
+            await target_canal.send(mensagem_formatada)
         
         await interaction.followup.send(
             f"✅ Anúncio enviado em {target_canal.mention}!",
@@ -1446,78 +1478,6 @@ async def anunciar(
         logger.error(f"Erro no comando anunciar: {e}", exc_info=True)
         await interaction.followup.send(
             f"❌ Erro ao enviar anúncio: {str(e)}",
-            ephemeral=True
-        )
-
-@bot.tree.command(name="tag_manual", description="[ADMIN] Concede TAG manual a um usuário")
-@app_commands.guild_only()
-@app_commands.describe(
-    usuario="Usuário que receberá a TAG",
-    quantidade="Quantidade de fichas (padrão: 1)"
-)
-async def tag_manual(
-    interaction: discord.Interaction,
-    usuario: discord.User,
-    quantidade: Optional[int] = 1
-):
-    if not is_admin_or_moderator(interaction):
-        await interaction.response.send_message(
-            "❌ Você não tem permissão para usar este comando.",
-            ephemeral=True
-        )
-        return
-    
-    if quantidade <= 0:
-        await interaction.response.send_message(
-            "❌ A quantidade deve ser maior que 0!",
-            ephemeral=True
-        )
-        return
-    
-    if not db.is_registered(usuario.id):
-        await interaction.response.send_message(
-            f"❌ {usuario.mention} não está inscrito no sorteio!",
-            ephemeral=True
-        )
-        return
-    
-    try:
-        db.add_manual_tag(usuario.id, quantidade)
-        
-        await interaction.response.send_message(
-            f"✅ {usuario.mention} recebeu +{quantidade} TAG manual!",
-            ephemeral=True
-        )
-        logger.info(f"TAG manual de {quantidade} concedida a {usuario} por {interaction.user}")
-    except Exception as e:
-        logger.error(f"Erro ao conceder TAG manual: {e}", exc_info=True)
-        await interaction.response.send_message(
-            f"❌ Erro ao conceder TAG: {str(e)}",
-            ephemeral=True
-        )
-
-@bot.tree.command(name="sync", description="[ADMIN] Sincroniza comandos com Discord")
-async def sync(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message(
-            "❌ Você não tem permissão para usar este comando.",
-            ephemeral=True
-        )
-        return
-    
-    await interaction.response.defer(ephemeral=True)
-    
-    try:
-        synced = await bot.tree.sync()
-        await interaction.followup.send(
-            f"✅ Sincronizados {len(synced)} comandos com sucesso!",
-            ephemeral=True
-        )
-        logger.info(f"Comandos sincronizados por {interaction.user} ({len(synced)} comandos)")
-    except Exception as e:
-        logger.error(f"Erro ao sincronizar comandos: {e}", exc_info=True)
-        await interaction.followup.send(
-            f"❌ Erro ao sincronizar: {str(e)}",
             ephemeral=True
         )
 
