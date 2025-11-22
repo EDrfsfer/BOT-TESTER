@@ -214,3 +214,44 @@ def validate_full_name(first_name: str, last_name: str) -> tuple:
         if ch not in allowed and not ch.isspace():
             return False, "❌ Caractere inválido no nome."
     return True, ""
+
+def parse_color(color_str: Optional[str]) -> discord.Color:
+    """
+    Converte string de cor para discord.Color
+    Aceita: nomes (blue, red, green) ou HEX (#FF5733)
+    """
+    if not color_str:
+        return discord.Color.blue()
+    
+    color_str = color_str.strip().lower()
+    
+    # Cores nomeadas
+    color_map = {
+        "blue": discord.Color.blue(),
+        "red": discord.Color.red(),
+        "green": discord.Color.green(),
+        "yellow": discord.Color.yellow(),
+        "purple": discord.Color.purple(),
+        "pink": discord.Color.pink(),
+        "orange": discord.Color.orange(),
+        "gold": discord.Color.gold(),
+        "teal": discord.Color.teal(),
+        "cyan": discord.Color.cyan(),
+        "magenta": discord.Color.magenta(),
+        "dark_blue": discord.Color.dark_blue(),
+        "dark_green": discord.Color.dark_green(),
+        "dark_red": discord.Color.dark_red(),
+    }
+    
+    if color_str in color_map:
+        return color_map[color_str]
+    
+    # HEX color
+    if color_str.startswith("#"):
+        try:
+            hex_value = color_str.lstrip("#")
+            return discord.Color(int(hex_value, 16))
+        except ValueError:
+            return discord.Color.blue()
+    
+    return discord.Color.blue()
