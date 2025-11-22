@@ -1414,7 +1414,6 @@ class AnuncioModal(discord.ui.Modal, title="Criar Anúncio"):
     )
     
     async def on_submit(self, interaction: discord.Interaction):
-        # Armazena os dados para o comando usar
         self.submitted_data = {
             "titulo": self.titulo.value.strip() if self.titulo.value else None,
             "mensagem": self.mensagem.value.strip(),
@@ -1422,31 +1421,123 @@ class AnuncioModal(discord.ui.Modal, title="Criar Anúncio"):
         }
         await interaction.response.defer(ephemeral=True)
 
-class AnuncioView(discord.ui.View):
-    """View para selecionar canal e tipo de envio"""
+class CanaisSelect(discord.ui.Select):
+    """Select dropdown para escolher canal"""
     
-    def __init__(self, modal_data: dict):
-        super().__init__(timeout=180)
-        self.modal_data = modal_data
-        self.selected_channel = None
+    def __init__(self, guild: discord.Guild):
+        canais = [ch for ch in guild.text_channels if ch.permissions_for(guild.me).send_messages]
+        
+        options = [
+            discord.SelectOption(
+                label=ch.name[:100],
+                value=str(ch.id),
+                emoji="📢"
+            )
+            for ch in canais[:25]
+        ]
+        
+        super().__init__(
+            placeholder="Escolha o canal para enviar...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        channel_id = int(self.values[0])
+        canal = interaction.guild.get_channel(channel_id)
+        
+        self.view.selected_channel = canal
+        
+        tipo_view = TipoAnuncioView()
+        
+        await interaction.response.send_message(
+            f"✅ Canal selecionado: {canal.mention}\n\nAgora escolha o tipo de envio:",
+            view=tipo_view,
+            ephemeral=True
+        )
+        
+        await tipo_view.wait()
+        self.view.use_embed = tipo_view.use_embed
+        self.view.stop()
+
+class TipoAnuncioView(discord.ui.View):
+    """View para escolher tipo de anúncio"""
+    
+    def __init__(self):
+        super().__init__(timeout=300)
         self.use_embed = False
     
-    @discord.ui.button(label="Enviar como Texto", style=discord.ButtonStyle.green)
-    async def enviar_texto(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="📝 Texto Simples", style=discord.ButtonStyle.green)
+    async def texto(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         self.use_embed = False
         self.stop()
     
-    @discord.ui.button(label="Enviar como Embed", style=discord.ButtonStyle.blurple)
-    async def enviar_embed(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🎨 Com Embed", style=discord.ButtonStyle.blurple)
+    async def embed(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         self.use_embed = True
         self.stop()
+
+class CanaiSelectView(discord.ui.View):
+    """Select para escolher canal e tipo de envio"""
     
-    @discord.ui.button(label="Cancelar", style=discord.ButtonStyle.red)
-    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        self.stop()
+    def __init__(self, guild: discord.Guild, modal_data: dict):
+        super().__init__(timeout=300)
+        self.guild = guild
+        self.modal_data = modal_data
+        self.selected_channel = None
+        self.use_embed = False
+        self.cancelled = False
+        
+        self.add_item(CanaisSelect(guild))
+    
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return True
+
+async def _wait_modal_submit(modal):
+    """Aguarda o submit do modal"""
+    while not hasattr(modal, 'submitted_data'):
+        await asyncio.sleep(0.1)
+
+async def _enviar_anuncio(interaction: discord.Interaction, canal: discord.TextChannel, data: dict, use_embed: bool):
+    """Envia o anúncio no canal escolhido"""
+    try:
+        if use_embed:
+            try:
+                cor_obj = utils.parse_color(data["cor"]) if data["cor"] else discord.Color.blue()
+            except:
+                cor_obj = discord.Color.blue()
+            
+            embed_obj = discord.Embed(
+                title=data["titulo"] or "Anúncio",
+                description=data["mensagem"],
+                color=cor_obj
+            )
+            
+            await canal.send(embed=embed_obj)
+        else:
+            conteudo = ""
+            if data["titulo"]:
+                conteudo = f"**{data['titulo']}**\n\n"
+            conteudo += data["mensagem"]
+            
+            await canal.send(conteudo)
+        
+        await interaction.followup.send(
+            f"✅ Anúncio enviado com sucesso em {canal.mention}!",
+            ephemeral=True
+        )
+        
+        logger.info(f"Anúncio enviado em {canal.name} por {interaction.user}")
+        
+    except Exception as e:
+        logger.error(f"Erro ao enviar anúncio: {e}", exc_info=True)
+        await interaction.followup.send(
+            f"❌ Erro ao enviar: {str(e)}",
+            ephemeral=True
+        )
 
 @bot.tree.command(name="anunciar", description="[ADMIN] Envia um anúncio com modal")
 @app_commands.guild_only()
@@ -1461,11 +1552,9 @@ async def anunciar(interaction: discord.Interaction):
         return
     
     try:
-        # Abre o modal
         modal = AnuncioModal()
         await interaction.response.send_modal(modal)
         
-        # Aguarda o submit do modal (até 15 minutos)
         await asyncio.wait_for(
             asyncio.create_task(_wait_modal_submit(modal)),
             timeout=900
@@ -1476,7 +1565,6 @@ async def anunciar(interaction: discord.Interaction):
         
         data = modal.submitted_data
         
-        # Cria embed para preview/seleção
         preview_embed = discord.Embed(
             title="📋 Preview do Anúncio",
             description="Escolha como enviar:",
@@ -1510,7 +1598,6 @@ async def anunciar(interaction: discord.Interaction):
                 inline=True
             )
         
-        # View para escolher canal e tipo
         select_view = CanaiSelectView(interaction.guild, data)
         
         await interaction.followup.send(
@@ -1519,7 +1606,6 @@ async def anunciar(interaction: discord.Interaction):
             ephemeral=True
         )
         
-        # Aguarda a seleção do canal
         await asyncio.wait_for(select_view.wait(), timeout=300)
         
         if not select_view.selected_channel or select_view.cancelled:
@@ -1529,13 +1615,12 @@ async def anunciar(interaction: discord.Interaction):
         canal = select_view.selected_channel
         use_embed = select_view.use_embed
         
-        # Envia o anúncio
         await _enviar_anuncio(interaction, canal, data, use_embed)
         
     except asyncio.TimeoutError:
         try:
             await interaction.followup.send(
-                "⏱️ Modal expirou. Tente novamente.",
+                "⏱️ Tempo expirou. Tente novamente.",
                 ephemeral=True
             )
         except:
@@ -1549,125 +1634,3 @@ async def anunciar(interaction: discord.Interaction):
             )
         except:
             pass
-
-class CanaiSelectView(discord.ui.View):
-    """Select para escolher canal e tipo de envio"""
-    
-    def __init__(self, guild: discord.Guild, modal_data: dict):
-        super().__init__(timeout=300)
-        self.guild = guild
-        self.modal_data = modal_data
-        self.selected_channel = None
-        self.use_embed = False
-        self.cancelled = False
-        
-        # Adiciona select de canais
-        self.add_item(CanaisSelect(guild))
-    
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == interaction.user.id
-
-class CanaisSelect(discord.ui.Select):
-    """Select dropdown para escolher canal"""
-    
-    def __init__(self, guild: discord.Guild):
-        # Filtra apenas canais de texto
-        canais = [ch for ch in guild.text_channels if ch.permissions_for(guild.me).send_messages]
-        
-        options = [
-            discord.SelectOption(
-                label=ch.name[:100],
-                value=str(ch.id),
-                emoji="📢"
-            )
-            for ch in canais[:25]  # Discord limita a 25 opções
-        ]
-        
-        super().__init__(
-            placeholder="Escolha o canal para enviar...",
-            min_values=1,
-            max_values=1,
-            options=options
-        )
-    
-    async def callback(self, interaction: discord.Interaction):
-        channel_id = int(self.values[0])
-        canal = interaction.guild.get_channel(channel_id)
-        
-        # Armazena no parent view
-        self.view.selected_channel = canal
-        
-        # Mostra botões de tipo
-        tipo_view = TipoAnuncioView()
-        
-        await interaction.response.send_message(
-            f"✅ Canal selecionado: {canal.mention}\n\nAgora escolha o tipo de envio:",
-            view=tipo_view,
-            ephemeral=True
-        )
-        
-        # Aguarda seleção do tipo
-        await tipo_view.wait()
-        self.view.use_embed = tipo_view.use_embed
-        self.view.stop()
-
-class TipoAnuncioView(discord.ui.View):
-    """View para escolher tipo de anúncio"""
-    
-    def __init__(self):
-        super().__init__(timeout=300)
-        self.use_embed = False
-    
-    @discord.ui.button(label="📝 Texto Simples", style=discord.ButtonStyle.green)
-    async def texto(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        self.use_embed = False
-        self.stop()
-    
-    @discord.ui.button(label="🎨 Com Embed", style=discord.ButtonStyle.blurple)
-    async def embed(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        self.use_embed = True
-        self.stop()
-
-async def _wait_modal_submit(modal):
-    """Aguarda o submit do modal"""
-    while not hasattr(modal, 'submitted_data'):
-        await asyncio.sleep(0.1)
-
-async def _enviar_anuncio(interaction: discord.Interaction, canal: discord.TextChannel, data: dict, use_embed: bool):
-    """Envia o anúncio no canal escolhido"""
-    try:
-        if use_embed:
-            # Envia como embed
-            try:
-                cor_obj = utils.parse_color(data["cor"]) if data["cor"] else discord.Color.blue()
-            except:
-                cor_obj = discord.Color.blue()
-            
-            embed_obj = discord.Embed(
-                title=data["titulo"] or "Anúncio",
-                description=data["mensagem"],
-                color=cor_obj
-            )
-            
-            await canal.send(embed=embed_obj)
-        else:
-            # Envia como texto simples (preserva quebras de linha)
-            conteudo = ""
-            if data["titulo"]:
-                conteudo = f"**{data['titulo']}**\n\n"
-            conteudo += data["mensagem"]
-            
-            await canal.send(conteudo)
-        
-        await interaction.followup.send(
-            f"✅ Anúncio enviado com sucesso em {canal.mention}!",
-            ephemeral=True
-        )
-    except Exception as e:
-        logger.error(f"Erro ao enviar anúncio: {e}", exc_info=True)
-        await interaction.followup.send(
-            "❌ Erro ao enviar anúncio. Veja logs do bot para mais detalhes.",
-            ephemeral=True
-        )
