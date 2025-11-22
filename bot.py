@@ -1634,3 +1634,74 @@ async def anunciar(interaction: discord.Interaction):
             )
         except:
             pass
+
+@bot.tree.command(name="tag_manual", description="[ADMIN] Concede TAG manual a um usuário")
+@app_commands.guild_only()
+@app_commands.describe(
+    usuario="Usuário para receber TAG manual",
+    quantidade="Quantidade de fichas da TAG"
+)
+async def tag_manual(interaction: discord.Interaction, usuario: discord.User, quantidade: int):
+    if not is_admin_or_moderator(interaction):
+        await interaction.response.send_message(
+            "❌ Você não tem permissão para usar este comando.",
+            ephemeral=True
+        )
+        return
+    
+    if not db.is_registered(usuario.id):
+        await interaction.response.send_message(
+            f"❌ {usuario.mention} não está inscrito no sorteio.",
+            ephemeral=True
+        )
+        return
+    
+    if quantidade <= 0:
+        await interaction.response.send_message(
+            "❌ A quantidade deve ser maior que 0!",
+            ephemeral=True
+        )
+        return
+    
+    db.set_manual_tag(usuario.id, quantidade)
+    
+    await interaction.response.send_message(
+        f"✅ {usuario.mention} recebeu **{quantidade}** ficha(s) de TAG manual!",
+        ephemeral=True
+    )
+    logger.info(f"TAG manual concedida: {usuario.id} ({quantidade} fichas) por {interaction.user}")
+
+@bot.tree.command(name="sync", description="[ADMIN] Sincroniza comandos do bot")
+async def sync(interaction: discord.Interaction):
+    if not is_admin_or_moderator(interaction):
+        await interaction.response.send_message(
+            "❌ Você não tem permissão para usar este comando.",
+            ephemeral=True
+        )
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    try:
+        synced = await interaction.client.tree.sync()
+        await interaction.followup.send(
+            f"✅ {len(synced)} comandos sincronizados!",
+            ephemeral=True
+        )
+        logger.info(f"Comandos sincronizados por {interaction.user}")
+    except Exception as e:
+        logger.error(f"Erro ao sincronizar: {e}", exc_info=True)
+        await interaction.followup.send(
+            f"❌ Erro ao sincronizar: {str(e)}",
+            ephemeral=True
+        )
+
+# Inicia threads Flask
+if __name__ == "__main__":
+    flask_thread = Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info("Flask iniciado em thread separada")
+    
+    try:
+        bot.run(os.getenv("BOT_TOKEN"))
+    except Exception as e:
+        logger.error(f"Erro ao iniciar bot: {e}")
