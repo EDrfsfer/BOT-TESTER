@@ -15,11 +15,55 @@ def load_db() -> Dict[str, Any]:
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                # Normaliza estrutura se necessário
+                return _normalize_db(data)
         except Exception as e:
             logger.error(f"Erro ao carregar database.json: {e}")
             return get_default_db()
     return get_default_db()
+
+def _normalize_db(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Normaliza estrutura antiga para nova se necessário"""
+    # Se já tem a estrutura correta, retorna
+    if "hashtag" in data and isinstance(data["hashtag"], dict) and "value" in data["hashtag"]:
+        return data
+    
+    # Migra estrutura antiga
+    normalized = get_default_db()
+    
+    # Copia dados existentes
+    if "participants" in data:
+        normalized["participants"] = data["participants"]
+    if "bonus_roles" in data:
+        normalized["bonus_roles"] = data["bonus_roles"]
+    if "blacklist" in data:
+        normalized["blacklist"] = data["blacklist"]
+    if "inscricao_channel" in data:
+        normalized["inscricao_channel"] = data["inscricao_channel"]
+    if "button_message_id" in data:
+        normalized["button_message_id"] = data["button_message_id"]
+    if "chat_lock" in data:
+        normalized["chat_lock"] = data["chat_lock"]
+    if "moderators" in data:
+        normalized["moderators"] = data["moderators"]
+    if "inscricoes_closed" in data:
+        normalized["inscricoes_closed"] = data["inscricoes_closed"]
+    
+    # Migra hashtag se estava salvo diretamente
+    if "hashtag" in data and isinstance(data["hashtag"], str):
+        normalized["hashtag"]["value"] = data["hashtag"]
+    elif "hashtag" in data and isinstance(data["hashtag"], dict):
+        if "value" not in data["hashtag"] and any(k in data["hashtag"] for k in ["text", "tag"]):
+            normalized["hashtag"]["value"] = data["hashtag"].get("text") or data["hashtag"].get("tag")
+        else:
+            normalized["hashtag"] = data["hashtag"]
+    
+    # Migra tag se existia
+    if "tag" in data:
+        normalized["tag"] = data["tag"]
+    
+    return normalized
 
 def save_db(data: Dict[str, Any]):
     """Salva dados no arquivo JSON"""
@@ -66,7 +110,7 @@ def get_hashtag() -> Optional[str]:
 
 def is_hashtag_locked() -> bool:
     global _db
-    return _db["hashtag"]["locked"]
+    return _db["hashtag"].get("locked", False)
 
 def lock_hashtag():
     global _db
@@ -308,7 +352,7 @@ def get_inscricoes_closed() -> bool:
 
 def get_statistics() -> Dict[str, Any]:
     global _db
-    participants = _db["participants"]
+    participants = _db.get("participants", {})
     
     total_participants = len(participants)
     total_tickets = 0
@@ -347,5 +391,5 @@ def get_statistics() -> Dict[str, Any]:
         "total_tickets": total_tickets,
         "participants_with_tag": participants_with_tag,
         "tickets_by_role": tickets_by_role,
-        "blacklist_count": len(_db["blacklist"])
+        "blacklist_count": len(_db.get("blacklist", {}))
     }
