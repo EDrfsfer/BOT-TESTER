@@ -1389,7 +1389,7 @@ async def chat(
         logger.info(f"Chat desbloqueado por {interaction.user}")
 
 class AnuncioModal(discord.ui.Modal, title="Criar Anúncio"):
-    """Modal para criar anúncios com suporte a quebras de linha e anexos"""
+    """Modal para criar anúncios com suporte a quebras de linha"""
     
     titulo = discord.ui.TextInput(
         label="Título (opcional)",
@@ -1421,13 +1421,14 @@ class AnuncioModal(discord.ui.Modal, title="Criar Anúncio"):
         }
         await interaction.response.defer(ephemeral=True)
 
-class AnuncioAnexosView(discord.ui.View):
-    """View para gerenciar anexos do anúncio"""
+class AnexosView(discord.ui.View):
+    """View com botão para adicionar anexos"""
     
     def __init__(self, interaction: discord.Interaction):
-        super().__init__(timeout=300)
+        super().__init__(timeout=600)
         self.interaction_user = interaction.user
         self.anexos = []
+        self.interaction = interaction
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.interaction_user.id:
@@ -1438,15 +1439,21 @@ class AnuncioAnexosView(discord.ui.View):
             return False
         return True
     
-    @discord.ui.button(label="📎 Anexar Arquivo", style=discord.ButtonStyle.gray)
+    @discord.ui.button(label="📎 Adicionar Foto/Vídeo/GIF", style=discord.ButtonStyle.blurple)
     async def adicionar_anexo(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            "📤 **Como adicionar anexos:**\n"
-            "1. Responda uma mensagem neste canal com a imagem/vídeo/gif\n"
-            "2. Reaja com ✅ após enviar todos os arquivos\n"
-            f"**Máximo**: 10 arquivos",
-            ephemeral=True
-        )
+        """Abre um modal para upload de arquivo"""
+        
+        class UploadModal(discord.ui.Modal, title="Upload de Arquivo"):
+            async def on_submit(self, modal_interaction: discord.Interaction):
+                # Apenas mostra instrução
+                await modal_interaction.response.send_message(
+                    f"📤 **Anexos adicionados**: {len(self.view.anexos)}/10\n\n"
+                    "Envie a imagem/vídeo/gif como resposta neste canal agora!",
+                    ephemeral=True
+                )
+        
+        upload_modal = UploadModal()
+        await interaction.response.send_modal(upload_modal)
     
     @discord.ui.button(label="✅ Continuar", style=discord.ButtonStyle.green)
     async def continuar(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1458,71 +1465,6 @@ class AnuncioAnexosView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         self.cancelado = True
         self.stop()
-
-async def _enviar_anuncio(interaction: discord.Interaction, canal: discord.TextChannel, data: dict, use_embed: bool, anexos: list = None):
-    """Envia o anúncio no canal escolhido"""
-    try:
-        anexos = anexos or []
-        
-        if use_embed and (data["titulo"] or data["mensagem"]):
-            try:
-                cor_obj = utils.parse_color(data["cor"]) if data["cor"] else discord.Color.blue()
-            except:
-                cor_obj = discord.Color.blue()
-            
-            embed_obj = discord.Embed(
-                title=data["titulo"] or "Anúncio",
-                description=data["mensagem"] or "",
-                color=cor_obj
-            )
-            
-            if anexos:
-                await canal.send(embed=embed_obj, files=anexos)
-            else:
-                await canal.send(embed=embed_obj)
-        
-        elif not use_embed and (data["titulo"] or data["mensagem"]):
-            conteudo = ""
-            if data["titulo"]:
-                conteudo = f"**{data['titulo']}**\n\n"
-            if data["mensagem"]:
-                conteudo += data["mensagem"]
-            
-            if anexos:
-                await canal.send(conteudo if conteudo else None, files=anexos)
-            else:
-                await canal.send(conteudo)
-        
-        elif anexos:
-            # Apenas anexos
-            await canal.send(files=anexos)
-        else:
-            await interaction.followup.send(
-                "❌ Nenhum conteúdo para enviar!",
-                ephemeral=True
-            )
-            return
-        
-        await interaction.followup.send(
-            f"✅ Anúncio enviado com sucesso em {canal.mention}!",
-            ephemeral=True
-        )
-        
-        logger.info(f"Anúncio enviado em {canal.name} por {interaction.user} ({len(anexos)} anexo(s))")
-        
-    except Exception as e:
-        logger.error(f"Erro ao enviar anúncio: {e}", exc_info=True)
-        await interaction.followup.send(
-            f"❌ Erro ao enviar: {str(e)}",
-            ephemeral=True
-        )
-        
-        # Limpa arquivos temporários
-        for file in (anexos or []):
-            try:
-                file.close()
-            except:
-                pass
 
 @bot.tree.command(name="anunciar", description="[ADMIN] Envia um anúncio com modal e anexos")
 @app_commands.guild_only()
@@ -1563,7 +1505,7 @@ async def anunciar(interaction: discord.Interaction):
         # Preview do anúncio
         preview_embed = discord.Embed(
             title="📋 Preview do Anúncio",
-            description="Envie anexos aqui (fotos/vídeos/gifs) ou clique em continuar",
+            description="Clique em 'Adicionar' para enviar fotos/vídeos/gifs",
             color=discord.Color.blue()
         )
         
@@ -1596,27 +1538,34 @@ async def anunciar(interaction: discord.Interaction):
                 inline=True
             )
         
-        preview_embed.set_footer(text="Você tem 5 minutos para enviar anexos via DM")
+        preview_embed.set_footer(text="Você tem 10 minutos para adicionar anexos")
         
         # View para anexos
-        anexos_view = AnuncioAnexosView(interaction)
+        anexos_view = AnexosView(interaction)
         
-        await interaction.followup.send(
+        msg = await interaction.followup.send(
             embed=preview_embed,
             view=anexos_view,
             ephemeral=True
         )
         
-        # Aguarda resposta dos botões por 5 minutos
-        await asyncio.wait_for(anexos_view.wait(), timeout=300)
+        # Aguarda resposta dos botões
+        await asyncio.wait_for(anexos_view.wait(), timeout=600)
         
         if hasattr(anexos_view, 'cancelado') and anexos_view.cancelado:
             await interaction.followup.send("❌ Operação cancelada.", ephemeral=True)
             return
         
-        # Marcar que tem mensagem
-        if data["titulo"] or data["mensagem"]:
-            anexos_view.tem_mensagem = True
+        # Coleta anexos enviados no canal
+        try:
+            async for msg_check in interaction.channel.history(limit=50, after=msg):
+                if msg_check.author == interaction.user and msg_check.attachments:
+                    for attachment in msg_check.attachments:
+                        if len(anexos_view.anexos) < 10:
+                            file = await attachment.to_file()
+                            anexos_view.anexos.append(file)
+        except:
+            pass
         
         # Escolher canal e tipo de envio
         select_view = CanaiSelectView(interaction.guild, data)
@@ -1760,6 +1709,72 @@ class CanaisSelect(discord.ui.Select):
                 "❌ Canal não encontrado!",
                 ephemeral=True
             )
+
+async def _enviar_anuncio(interaction: discord.Interaction, canal: discord.TextChannel, data: dict, use_embed: bool, anexos: list):
+    """Envia o anúncio no canal selecionado"""
+    try:
+        if use_embed:
+            # Enviar como Embed
+            embed = discord.Embed(
+                title=data.get("titulo") or "Anúncio",
+                description=data.get("mensagem") or "",
+                color=discord.Color.blue()
+            )
+            
+            # Tenta interpretar a cor se fornecida
+            if data.get("cor"):
+                try:
+                    cor_str = data["cor"].lower().strip()
+                    if cor_str.startswith("#"):
+                        # HEX color
+                        embed.color = discord.Color(int(cor_str[1:], 16))
+                    else:
+                        # Named color
+                        color_map = {
+                            "blue": discord.Color.blue(),
+                            "red": discord.Color.red(),
+                            "green": discord.Color.green(),
+                            "yellow": discord.Color.gold(),
+                            "purple": discord.Color.purple(),
+                            "orange": discord.Color.orange(),
+                            "pink": discord.Color.magenta(),
+                        }
+                        embed.color = color_map.get(cor_str, discord.Color.blue())
+                except Exception:
+                    pass
+            
+            # Enviar com anexos se houver
+            if anexos:
+                await canal.send(embed=embed, files=anexos)
+            else:
+                await canal.send(embed=embed)
+        else:
+            # Enviar como Texto
+            content = ""
+            if data.get("titulo"):
+                content += f"**{data['titulo']}**\n"
+            if data.get("mensagem"):
+                content += data["mensagem"]
+            
+            if anexos:
+                await canal.send(content or "Anúncio enviado", files=anexos)
+            else:
+                await canal.send(content or "Anúncio enviado")
+        
+        # Resposta de sucesso
+        await interaction.followup.send(
+            f"✅ Anúncio enviado com sucesso em {canal.mention}!",
+            ephemeral=True
+        )
+        
+        logger.info(f"Anúncio enviado por {interaction.user} em {canal.name}")
+        
+    except Exception as e:
+        logger.error(f"Erro ao enviar anúncio: {e}", exc_info=True)
+        await interaction.followup.send(
+            f"❌ Erro ao enviar anúncio: {str(e)}",
+            ephemeral=True
+        )
 
 # Inicia threads Flask
 if __name__ == "__main__":
