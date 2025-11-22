@@ -1481,6 +1481,78 @@ async def anunciar(
             ephemeral=True
         )
 
+@bot.tree.command(name="tag_manual", description="[ADMIN] Concede TAG manual a um usuário")
+@app_commands.guild_only()
+@app_commands.describe(
+    usuario="Usuário que receberá a TAG",
+    quantidade="Quantidade de fichas (padrão: 1)"
+)
+async def tag_manual(
+    interaction: discord.Interaction,
+    usuario: discord.User,
+    quantidade: Optional[int] = 1
+):
+    if not is_admin_or_moderator(interaction):
+        await interaction.response.send_message(
+            "❌ Você não tem permissão para usar este comando.",
+            ephemeral=True
+        )
+        return
+    
+    if quantidade <= 0:
+        await interaction.response.send_message(
+            "❌ A quantidade deve ser maior que 0!",
+            ephemeral=True
+        )
+        return
+    
+    if not db.is_registered(usuario.id):
+        await interaction.response.send_message(
+            f"❌ {usuario.mention} não está inscrito no sorteio!",
+            ephemeral=True
+        )
+        return
+    
+    try:
+        db.add_manual_tag(usuario.id, quantidade)
+        
+        await interaction.response.send_message(
+            f"✅ {usuario.mention} recebeu +{quantidade} TAG manual!",
+            ephemeral=True
+        )
+        logger.info(f"TAG manual de {quantidade} concedida a {usuario} por {interaction.user}")
+    except Exception as e:
+        logger.error(f"Erro ao conceder TAG manual: {e}", exc_info=True)
+        await interaction.response.send_message(
+            f"❌ Erro ao conceder TAG: {str(e)}",
+            ephemeral=True
+        )
+
+@bot.tree.command(name="sync", description="[ADMIN] Sincroniza comandos com Discord")
+async def sync(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "❌ Você não tem permissão para usar este comando.",
+            ephemeral=True
+        )
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        synced = await bot.tree.sync()
+        await interaction.followup.send(
+            f"✅ Sincronizados {len(synced)} comandos com sucesso!",
+            ephemeral=True
+        )
+        logger.info(f"Comandos sincronizados por {interaction.user} ({len(synced)} comandos)")
+    except Exception as e:
+        logger.error(f"Erro ao sincronizar comandos: {e}", exc_info=True)
+        await interaction.followup.send(
+            f"❌ Erro ao sincronizar: {str(e)}",
+            ephemeral=True
+        )
+
 # Inicia threads Flask
 if __name__ == "__main__":
     flask_thread = Thread(target=run_flask, daemon=True)
