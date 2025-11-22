@@ -1589,6 +1589,137 @@ async def sync(interaction: discord.Interaction):
             ephemeral=True
         )
 
+@bot.tree.command(name="adicionar_participante", description="[ADMIN] Adiciona um participante manualmente")
+@app_commands.guild_only()
+@app_commands.describe(
+    usuario="Usuário a adicionar",
+    primeiro_nome="Primeiro nome do participante",
+    sobrenome="Sobrenome do participante"
+)
+async def adicionar_participante(
+    interaction: discord.Interaction,
+    usuario: discord.User,
+    primeiro_nome: str,
+    sobrenome: str
+):
+    if not is_admin_or_moderator(interaction):
+        await interaction.response.send_message(
+            "❌ Você não tem permissão para usar este comando.",
+            ephemeral=True
+        )
+        return
+    
+    try:
+        await interaction.response.defer(ephemeral=True)
+        
+        # Valida se o usuário está na blacklist
+        if db.is_blacklisted(usuario.id):
+            await interaction.followup.send(
+                "❌ Este usuário está na blacklist e não pode ser adicionado.",
+                ephemeral=True
+            )
+            return
+        
+        # Valida se já está inscrito
+        if db.is_registered(usuario.id):
+            await interaction.followup.send(
+                "❌ Este usuário já está inscrito no sorteio!",
+                ephemeral=True
+            )
+            return
+        
+        # Valida nome
+        valid, error_msg = utils.validate_full_name(primeiro_nome, sobrenome)
+        if not valid:
+            await interaction.followup.send(error_msg, ephemeral=True)
+            return
+        
+        # Valida se o nome já foi utilizado
+        if db.is_name_taken(primeiro_nome, sobrenome):
+            await interaction.followup.send(
+                "❌ Este nome já foi registrado por outro participante.",
+                ephemeral=True
+            )
+            return
+        
+        # Pega a hashtag configurada (automaticamente)
+        required_hashtag = db.get_hashtag()
+        if not required_hashtag:
+            await interaction.followup.send(
+                "⚠️ Nenhuma hashtag foi configurada. Contate um administrador.",
+                ephemeral=True
+            )
+            return
+        
+        # Pega dados para calcular fichas
+        inscricao_channel_id = db.get_inscricao_channel()
+        if not inscricao_channel_id:
+            await interaction.followup.send(
+                "⚠️ Canal de inscrições não configurado. Contate um administrador.",
+                ephemeral=True
+            )
+            return
+        
+        inscricao_channel = interaction.guild.get_channel(inscricao_channel_id)
+        if not inscricao_channel:
+            await interaction.followup.send(
+                "⚠️ Canal de inscrições não encontrado. Contate um administrador.",
+                ephemeral=True
+            )
+            return
+        
+        # Calcula as fichas baseado nos cargos e TAG
+        bonus_roles = db.get_bonus_roles()
+        tag_config = db.get_tag()
+        
+        member = interaction.guild.get_member(usuario.id)
+        if not member:
+            await interaction.followup.send(
+                "❌ Usuário não encontrado no servidor!",
+                ephemeral=True
+            )
+            return
+        
+        tickets = utils.calculate_tickets(
+            member,
+            bonus_roles,
+            tag_config["enabled"],
+            tag_config["text"],
+            tag_config["quantity"]
+        )
+        
+        total_tickets = utils.get_total_tickets(tickets)
+        
+        # Envia mensagem no canal de inscrições
+        msg_content = f"{member.mention}\n{primeiro_nome} {sobrenome}\n{required_hashtag}"
+        msg = await inscricao_channel.send(msg_content)
+        await msg.add_reaction("✅")
+        
+        # Adiciona ao banco de dados
+        db.add_participant(
+            usuario.id,
+            primeiro_nome,
+            sobrenome,
+            tickets,
+            msg.id
+        )
+        
+        await interaction.followup.send(
+            f"✅ Participante adicionado com sucesso!\n"
+            f"**Nome**: {primeiro_nome} {sobrenome}\n"
+            f"**Fichas**: {total_tickets}",
+            ephemeral=True
+        )
+        
+        logger.info(f"Participante adicionado manualmente: {primeiro_nome} {sobrenome} ({usuario.id}) - {total_tickets} fichas por {interaction.user}")
+    
+    except Exception as e:
+        logger.error(f"Erro ao adicionar participante manualmente: {e}", exc_info=True)
+        await interaction.followup.send(
+            f"❌ Erro ao adicionar participante: {str(e)}",
+            ephemeral=True
+        )
+
 # Inicia threads Flask
 if __name__ == "__main__":
     flask_thread = Thread(target=run_flask, daemon=True)
